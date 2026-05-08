@@ -32,17 +32,37 @@ pub struct Solution {
     pub elapsed: Duration,
 }
 
+/// Outcome of a single mining attempt.
+#[derive(Debug)]
+pub enum SolveOutcome {
+    /// A nonce satisfying the difficulty requirement was found before the
+    /// deadline elapsed.
+    Found(Solution),
+    /// The configured deadline (typically derived from the challenge TTL
+    /// minus a safety buffer) elapsed before any worker found a solution.
+    /// The caller should drop this challenge and request a fresh one.
+    DeadlineReached { hashes: u64, elapsed: Duration },
+    /// The outer cancel flag was raised (graceful shutdown). The supervisor
+    /// should exit.
+    Cancelled,
+}
+
 /// Solve the given challenge using `threads` worker threads. Each worker
 /// searches a disjoint subset of the 64-bit nonce space (worker `i` of `n`
 /// tries nonces `i, i+n, i+2n, ...`), computing SHA-256 in a tight loop and
 /// stopping as soon as any worker finds a nonce whose SHA-256 digest has at
 /// least `difficulty_bits` trailing zero bits.
+///
+/// `deadline`, if `Some`, bounds how long mining will run before giving up
+/// (used to abort before the server-side challenge expiry of 5 minutes —
+/// see `apps/server/src/routes/challenge.ts`).
 pub async fn solve(
     challenge: Challenge,
     threads: usize,
     stats: Arc<Stats>,
     cancel: Arc<AtomicBool>,
-) -> Result<Solution> {
+    deadline: Option<Instant>,
+) -> Result<SolveOutcome> {
     let prefix = hex::decode(&challenge.nonce_prefix)
         .with_context(|| format!("decoding nonce_prefix hex: {:?}", challenge.nonce_prefix))?;
     let difficulty = challenge.difficulty_bits;
@@ -90,19 +110,33 @@ pub async fn solve(
         handles.push(handle);
     }
 
-    // Watcher: if the outer cancel flag flips (e.g. shutdown), tell workers to stop.
-    let stop_for_cancel = Arc::clone(&stop);
+    // Watcher: stop workers when (a) the outer cancel flag flips, or
+    // (b) the deadline elapses. We track which one tripped so we can return
+    // the right SolveOutcome.
+    let stop_for_watch = Arc::clone(&stop);
+    let cancel_for_watch = Arc::clone(&cancel);
+    let deadline_hit = Arc::new(AtomicBool::new(false));
+    let deadline_hit_for_watch = Arc::clone(&deadline_hit);
     let cancel_watcher = tokio::spawn(async move {
         loop {
-            if cancel.load(Ordering::Relaxed) {
-                stop_for_cancel.store(true, Ordering::Relaxed);
+            if cancel_for_watch.load(Ordering::Relaxed) {
+                stop_for_watch.store(true, Ordering::Relaxed);
                 return;
+            }
+            if let Some(d) = deadline {
+                if Instant::now() >= d {
+                    deadline_hit_for_watch.store(true, Ordering::Relaxed);
+                    stop_for_watch.store(true, Ordering::Relaxed);
+                    return;
+                }
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     });
 
-    // Wait for any worker to find a solution.
+    // Wait for any worker to find a solution. If `stop` is raised by the
+    // watcher (cancel/deadline) all workers exit, the senders are dropped,
+    // and `rx.await` resolves to `Err`.
     let result = rx.await;
 
     // Tell remaining workers to stop and join them.
@@ -112,9 +146,19 @@ pub async fn solve(
     }
     cancel_watcher.abort();
 
+    let elapsed = started.elapsed();
+    let hashes = stats.total_hashes.load(Ordering::Relaxed);
     match result {
-        Ok(sol) => Ok(sol),
-        Err(_) => Err(anyhow!("mining cancelled before a solution was found")),
+        Ok(sol) => Ok(SolveOutcome::Found(sol)),
+        Err(_) => {
+            if cancel.load(Ordering::Relaxed) {
+                Ok(SolveOutcome::Cancelled)
+            } else if deadline_hit.load(Ordering::Relaxed) {
+                Ok(SolveOutcome::DeadlineReached { hashes, elapsed })
+            } else {
+                Err(anyhow!("all worker threads exited without finding a solution"))
+            }
+        }
     }
 }
 

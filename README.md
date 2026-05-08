@@ -151,6 +151,8 @@ matches your mental model of the project).
 | `RPOW_LOG` | no | `info` | `tracing` filter, e.g. `debug`, `rpow_miner=debug`. |
 | `PORT` / `RPOW_STATUS_PORT` | no | `8080` | HTTP status server port. Railway injects `PORT` automatically. |
 | `RPOW_STATUS_DISABLED` | no | unset | Set to `1` to disable the HTTP status server. |
+| `RPOW_CHALLENGE_TTL_SECS` | no | `300` | Server-side TTL for a challenge (used to compute the local solve deadline). Don't change this unless the server changes its TTL. |
+| `RPOW_DEADLINE_BUFFER_SECS` | no | `15` | Safety buffer subtracted from `CHALLENGE_TTL_SECS` to leave time for the `/mint` request. Increase if your network roundtrip to the API is high. |
 
 ## Status HTTP endpoints
 
@@ -278,15 +280,41 @@ The mining hot loop hashes 4096 nonces between `stop`-flag checks; on a 2-vCPU
 machine the self-test reports ~26 MH/s aggregate (~13 MH/s/core). Real-world
 performance scales linearly with cores.
 
+## Hashrate & difficulty
+
+Server-side, supply is capped at 21,000,000 tokens and difficulty grows by one
+bit per 1,000,000 minted (see
+[`apps/server/src/schedule.ts`](https://github.com/frkrueger/rpow/blob/main/apps/server/src/schedule.ts)).
+Each challenge has a **5-minute TTL** server-side
+([`apps/server/src/routes/challenge.ts`](https://github.com/frkrueger/rpow/blob/main/apps/server/src/routes/challenge.ts);
+mint will return HTTP 410 `CHALLENGE_EXPIRED` after that). The miner enforces
+a local deadline of `CHALLENGE_TTL - DEADLINE_BUFFER` (default 285 s); if the
+deadline elapses it drops the challenge and requests a fresh one rather than
+wasting time on an already-dead one (and you'll see `deadline_misses` tick up
+in the periodic `[stats]` log line).
+
+Rough expected solve time per challenge:
+
+```
+mean_time_secs ≈ 2^difficulty_bits / hashrate
+```
+
+So a 2-vCPU machine at ~34 MH/s mining at difficulty 33 averages
+`2^33 / 34M ≈ 252s` per challenge — uncomfortably close to the 5-minute TTL.
+On a noisy variance you'll often miss the deadline. **Practical guidance:**
+
+- **Difficulty ≤ 30**: any 2+ core box works.
+- **Difficulty 31–32**: aim for ≥ 8 cores or a high-clock x86.
+- **Difficulty ≥ 33**: 16+ cores or a GPU/ASIC equivalent recommended; on
+  Railway, scale up the plan or run several services in parallel.
+
+You can check the live difficulty in your service logs (`difficulty_bits=...`
+on the `received challenge` line) or by looking at the rpow2.com homepage.
+
 ## Caveats
 
 - The `RPOW_COOKIE` is a **bearer credential**. Anyone with that cookie can
   spend tokens from your account. Treat it like a password — never commit it,
   and prefer Railway/your secrets manager over plain env files.
 - The miner is single-process. Run multiple containers on multiple machines if
-  you want more aggregate hashrate.
-- Server-side, supply is capped at 21,000,000 tokens and difficulty grows by
-  one bit per 1,000,000 minted (see
-  [`apps/server/src/schedule.ts`](https://github.com/frkrueger/rpow/blob/main/apps/server/src/schedule.ts)).
-  At the current default of 28 bits a modern x86 core finds a valid nonce in
-  about half a minute on average.
+  you want more aggregate hashrate. See "Hashrate & difficulty" above.

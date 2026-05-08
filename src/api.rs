@@ -16,6 +16,12 @@ pub struct Challenge {
     pub challenge_id: String,
     pub nonce_prefix: String,
     pub difficulty_bits: u32,
+    /// ISO-8601 timestamp at which the server will reject this challenge with
+    /// HTTP 410 `CHALLENGE_EXPIRED`. Logged for transparency; the deadline
+    /// actually used by the miner is computed locally from the moment the
+    /// response was received plus the configured TTL/buffer.
+    #[serde(default)]
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

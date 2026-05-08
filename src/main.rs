@@ -7,7 +7,7 @@ mod stats;
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::signal;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -102,12 +102,13 @@ async fn main() -> Result<()> {
                 let s = stats.snapshot();
                 let mh = s.hashrate_per_sec / 1_000_000.0;
                 info!(
-                    "[stats] uptime={:.0}s hashes={} hashrate={:.2}MH/s minted={} mint_failures={} difficulty={}",
+                    "[stats] uptime={:.0}s hashes={} hashrate={:.2}MH/s minted={} mint_failures={} deadline_misses={} difficulty={}",
                     s.uptime_secs,
                     s.total_hashes,
                     mh,
                     s.tokens_minted,
                     s.mint_failures,
+                    s.deadline_misses,
                     s.current_difficulty,
                 );
             }
@@ -174,8 +175,28 @@ async fn mining_supervisor(
 ) {
     let mut consecutive_errors: u32 = 0;
 
+    // Server-side challenge TTL (see frkrueger/rpow apps/server/src/routes/challenge.ts:54
+    // `new Date(Date.now() + 5 * 60 * 1000)`). We bail a configurable number
+    // of seconds before that so the /mint roundtrip lands inside the window.
+    let challenge_ttl = Duration::from_secs(
+        std::env::var("RPOW_CHALLENGE_TTL_SECS")
+            .or_else(|_| std::env::var("RPOW2_CHALLENGE_TTL_SECS"))
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(300),
+    );
+    let deadline_buffer = Duration::from_secs(
+        std::env::var("RPOW_DEADLINE_BUFFER_SECS")
+            .or_else(|_| std::env::var("RPOW2_DEADLINE_BUFFER_SECS"))
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(15),
+    );
+    let solve_budget = challenge_ttl.saturating_sub(deadline_buffer);
+
     while !cancel.load(Ordering::Relaxed) {
-        // 1) Fetch a challenge.
+        // 1) Fetch a challenge. Capture the moment we got it so we can
+        //    compute the local deadline relative to our own clock.
         let challenge = match api.challenge().await {
             Ok(c) => {
                 consecutive_errors = 0;
@@ -184,6 +205,8 @@ async fn mining_supervisor(
                     challenge_id = %c.challenge_id,
                     nonce_prefix_len_bytes = c.nonce_prefix.len() / 2,
                     difficulty_bits = c.difficulty_bits,
+                    expires_at = c.expires_at.as_deref().unwrap_or("?"),
+                    solve_budget_secs = solve_budget.as_secs(),
                     "received challenge"
                 );
                 c
@@ -209,17 +232,38 @@ async fn mining_supervisor(
 
         let challenge_id = challenge.challenge_id.clone();
         let difficulty = challenge.difficulty_bits;
+        let deadline = Some(Instant::now() + solve_budget);
 
-        // 2) Solve.
+        // 2) Solve, with a deadline so we abort before the server-side
+        //    challenge expiry rather than wasting time on an already-dead
+        //    challenge.
         let solution = match miner::solve(
             challenge,
             cfg.threads,
             Arc::clone(&stats),
             Arc::clone(&cancel),
+            deadline,
         )
         .await
         {
-            Ok(s) => s,
+            Ok(miner::SolveOutcome::Found(s)) => s,
+            Ok(miner::SolveOutcome::Cancelled) => return,
+            Ok(miner::SolveOutcome::DeadlineReached { hashes, elapsed }) => {
+                let mh = (hashes as f64) / elapsed.as_secs_f64() / 1_000_000.0;
+                warn!(
+                    challenge_id = %challenge_id,
+                    difficulty_bits = difficulty,
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    hashes = hashes,
+                    hashrate_mh = format!("{mh:.2}"),
+                    "challenge solve budget elapsed without finding a nonce; \
+                     dropping it and requesting a fresh one (current difficulty \
+                     is too high for this hashrate to reliably solve within the \
+                     5-minute server TTL — consider scaling up cores)"
+                );
+                stats.deadline_misses.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
             Err(e) => {
                 if cancel.load(Ordering::Relaxed) {
                     return;
@@ -448,12 +492,19 @@ async fn run_selftest() -> Result<()> {
         challenge_id: "selftest".to_string(),
         nonce_prefix: hex::encode(prefix_bytes),
         difficulty_bits: difficulty,
+        expires_at: None,
     };
     let stats = stats::Stats::new();
     let cancel = Arc::new(AtomicBool::new(false));
 
     let started = std::time::Instant::now();
-    let sol = miner::solve(challenge, threads, Arc::clone(&stats), cancel).await?;
+    let outcome = miner::solve(challenge, threads, Arc::clone(&stats), cancel, None).await?;
+    let sol = match outcome {
+        miner::SolveOutcome::Found(s) => s,
+        miner::SolveOutcome::DeadlineReached { .. } | miner::SolveOutcome::Cancelled => {
+            return Err(anyhow::anyhow!("self-test aborted before finding a solution"));
+        }
+    };
     let elapsed = started.elapsed();
     let snapshot = stats.snapshot();
     info!(
