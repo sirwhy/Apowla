@@ -1,0 +1,10 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "rpow-miner"
+restartPolicyType = "ALWAYS"
+restartPolicyMaxRetries = 0
+healthcheckPath = "/health"
+healthcheckTimeout = 30
