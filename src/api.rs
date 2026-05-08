@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::config::Config;
 
-/// Name of the session cookie set by https://api.rpow3.com after a successful
+/// Name of the session cookie set by https://api.rpow2.com after a successful
 /// magic-link verification. The server reads this exact cookie name on every
 /// authenticated request (`rpow_session`).
 pub const SESSION_COOKIE_NAME: &str = "rpow_session";

@@ -2,7 +2,7 @@
 name = "rpow-miner"
 version = "0.1.0"
 edition = "2021"
-description = "Multithreaded RPOW miner (https://rpow3.com)"
+description = "Multithreaded RPOW miner (https://rpow2.com)"
 license = "MIT"
 publish = false
 

@@ -61,13 +61,13 @@ async fn main() -> Result<()> {
                 email = me.email.unwrap_or_default(),
                 balance = me.balance.unwrap_or(0),
                 minted = me.minted.unwrap_or(0),
-                "authenticated to rpow3.com"
+                "authenticated"
             );
         }
         Err(ApiCallError::Unauthorized(msg)) => {
             error!(
                 "session cookie rejected by /me ({msg}). Run `rpow-miner login --email YOU@example.com` \
-                 to obtain a fresh cookie (or log in at https://rpow3.com and copy the `rpow_session` \
+                 to obtain a fresh cookie (or log in at https://rpow2.com and copy the `rpow_session` \
                  cookie from DevTools -> Application -> Cookies), then set RPOW_COOKIE."
             );
             std::process::exit(2);
@@ -290,15 +290,15 @@ SUBCOMMANDS:\n\
     --version / -V    Show version.\n\n\
 ENVIRONMENT (mining mode):\n\
     RPOW_COOKIE       Required. Cookie header value, e.g. 'rpow_session=...'\n\
-    RPOW_API_BASE     Default https://api.rpow3.com\n\
+    RPOW_API_BASE     Default https://api.rpow2.com\n\
     RPOW_THREADS      Default = all logical CPUs\n\
     RPOW_LOG          Default = info (tracing filter)\n\
     PORT              Status HTTP port (default 8080)\n\n\
 ENVIRONMENT (login mode):\n\
     RPOW_LOGIN_EMAIL  Skip the email prompt and use this address.\n\
     RPOW_API_BASE / RPOW_ORIGIN as above\n\n\
-LEGACY: All RPOW_* variables also accept the old RPOW2_* names (e.g.\n\
-    RPOW2_COOKIE) so configs from the previous rpow2.com era still work.\n\n\
+ALIASES: Every RPOW_* variable also accepts the equivalent RPOW2_* name\n\
+    (e.g. RPOW_COOKIE === RPOW2_COOKIE). Use whichever you prefer.\n\n\
 EXAMPLES:\n\
     rpow-miner login --email me@example.com\n\
     RPOW_COOKIE='rpow_session=eyJ...' rpow-miner\n",
@@ -307,7 +307,7 @@ EXAMPLES:\n\
 }
 
 /// Interactive register/login flow. No account is required up-front: the
-/// rpow3 server auto-creates the user on first magic-link verification, so
+/// rpow2 server auto-creates the user on first magic-link verification, so
 /// this is also the registration path.
 ///
 /// Steps:
@@ -344,12 +344,12 @@ your inbox. Prints the resulting RPOW_COOKIE value when done."
 
     let api_base = std::env::var("RPOW_API_BASE")
         .or_else(|_| std::env::var("RPOW2_API_BASE"))
-        .unwrap_or_else(|_| "https://api.rpow3.com".to_string())
+        .unwrap_or_else(|_| "https://api.rpow2.com".to_string())
         .trim_end_matches('/')
         .to_string();
     let origin = std::env::var("RPOW_ORIGIN")
         .or_else(|_| std::env::var("RPOW2_ORIGIN"))
-        .unwrap_or_else(|_| "https://rpow3.com".to_string());
+        .unwrap_or_else(|_| "https://rpow2.com".to_string());
     let user_agent = std::env::var("RPOW_USER_AGENT")
         .or_else(|_| std::env::var("RPOW2_USER_AGENT"))
         .unwrap_or_else(|_| "rpow-miner/0.1 (login)".to_string());

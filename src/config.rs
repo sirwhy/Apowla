@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Base URL of the RPOW API. Defaults to https://api.rpow3.com.
+    /// Base URL of the RPOW API. Defaults to https://api.rpow2.com (the
+    /// canonical/production site). Override to e.g. https://api.rpow3.com if
+    /// you want to point the miner at the experimental sandbox instead.
     pub api_base: String,
     /// Cookie header value used to authenticate requests, e.g.
     /// `rpow_session=eyJ...`. The easiest way to obtain it is to run
@@ -11,7 +13,7 @@ pub struct Config {
     pub cookie: String,
     /// Number of mining worker threads. Defaults to all logical CPUs.
     pub threads: usize,
-    /// Origin header value sent with API requests. Defaults to https://rpow3.com.
+    /// Origin header value sent with API requests. Defaults to https://rpow2.com.
     pub origin: String,
     /// Optional User-Agent override.
     pub user_agent: String,
@@ -21,9 +23,9 @@ pub struct Config {
     pub status_enabled: bool,
 }
 
-/// Read an env var, accepting either the canonical `RPOW_*` name or the legacy
-/// `RPOW2_*` alias (kept for users who already configured the previous miner
-/// version that targeted https://rpow2.com).
+/// Read an env var, accepting either the canonical `RPOW_*` name or the
+/// `RPOW2_*` alias (the same project is hosted at rpow2.com, so users often
+/// reach for that prefix). The two names are equivalent.
 fn env_var(canonical: &str, legacy: &str) -> Option<String> {
     std::env::var(canonical)
         .ok()
@@ -44,12 +46,12 @@ impl Config {
         }
 
         let api_base = env_var("RPOW_API_BASE", "RPOW2_API_BASE")
-            .unwrap_or_else(|| "https://api.rpow3.com".to_string())
+            .unwrap_or_else(|| "https://api.rpow2.com".to_string())
             .trim_end_matches('/')
             .to_string();
 
         let origin = env_var("RPOW_ORIGIN", "RPOW2_ORIGIN")
-            .unwrap_or_else(|| "https://rpow3.com".to_string());
+            .unwrap_or_else(|| "https://rpow2.com".to_string());
 
         let user_agent = env_var("RPOW_USER_AGENT", "RPOW2_USER_AGENT").unwrap_or_else(|| {
             "rpow-miner/0.1 (+https://github.com/) reqwest".to_string()

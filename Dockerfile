@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # ---------- Build stage ----------
-FROM rust:1.86-slim-bookworm AS builder
+FROM rust:1.85-slim-bookworm AS builder
 
 WORKDIR /build
 ENV CARGO_TERM_COLOR=always

@@ -1,28 +1,28 @@
 # rpow-miner
 
-Multithreaded Rust miner for [rpow3.com](https://rpow3.com), the modern tribute
+Multithreaded Rust miner for [rpow2.com](https://rpow2.com), the modern tribute
 to Hal Finney's Reusable Proofs of Work.
 
-It fetches challenges from `https://api.rpow3.com/challenge`, hashes
+It fetches challenges from `https://api.rpow2.com/challenge`, hashes
 `SHA-256(nonce_prefix || nonce_le_8bytes)` across every CPU core, and submits
 the first nonce whose digest has at least `difficulty_bits` trailing zero bits
 back to `POST /mint`. Designed to run 24/7 — fully unattended with retries,
 backoff, graceful shutdown and a tiny HTTP `/stats` endpoint.
 
 The mining algorithm is byte-for-byte compatible with the official browser
-miner shipped at `https://rpow3.com/assets/miner.worker-*.js` (SHA-256 with
+miner shipped at `https://rpow2.com/assets/miner.worker-*.js` (SHA-256 with
 the same little-endian 8-byte nonce encoding and the same trailing-zero-bit
 counting convention). The server side is the open-source
 [`frkrueger/rpow`](https://github.com/frkrueger/rpow) project.
 
-> Heads up: the project was originally hosted at `rpow2.com`. It has since
-> rebranded to `rpow3.com`. This miner targets `rpow3.com` by default but
-> still understands the legacy `RPOW2_*` environment variable names.
+> The same software is also deployed at `rpow3.com` as a sandbox / "fun"
+> instance. The `RPOW_API_BASE` and `RPOW_ORIGIN` env vars let you point
+> this miner at any deployment of the protocol; the default is rpow2.com.
 
 ## How it works
 
 ```
-client                                              server (api.rpow3.com)
+client                                              server (api.rpow2.com)
 ------                                              ----------------------
                                   POST /challenge
                   ───────────────────────────────────────►
@@ -49,7 +49,7 @@ verifies the same way with `Buffer.alloc(8)` LE encoding.
 
 ## Requirements
 
-- An email address. **You do not need to register at rpow3.com first** — the
+- An email address. **You do not need to register at rpow2.com first** — the
   server auto-creates an account on the first magic-link verification, so the
   built-in `login` subcommand below is also the registration flow.
 - Either:
@@ -76,8 +76,8 @@ export RPOW_COOKIE='rpow_session=eyJhbGciOi...'   # paste from step 2
 You should see logs like:
 
 ```
-INFO starting rpow-miner api_base=https://api.rpow3.com threads=8 status_port=8080
-INFO authenticated to rpow3.com email=you@... balance=12 minted=12
+INFO starting rpow-miner api_base=https://api.rpow2.com threads=8 status_port=8080
+INFO authenticated email=you@... balance=12 minted=12
 INFO received challenge challenge_id=... difficulty_bits=28
 INFO FOUND solution; submitting to /mint nonce=4218945 trailing_bits=29 elapsed_ms=312
 INFO minted token token_id=...
@@ -90,7 +90,7 @@ INFO [stats] uptime=30s hashes=520400000 hashrate=17.34MH/s minted=4 ...
 rpow-miner login [--email YOU@example.com]
 ```
 
-Walks you through the rpow3 magic-link flow end-to-end:
+Walks you through the rpow2 magic-link flow end-to-end:
 
 1. Prompts for your email (or use `--email` / `RPOW_LOGIN_EMAIL`).
 2. Calls `POST /auth/request` so the server sends you a magic link.
@@ -111,6 +111,18 @@ email prompt; the verify-URL prompt still requires stdin. For Railway, do the
 login locally on your laptop and only set `RPOW_COOKIE` in the Railway
 variables — Railway's runtime is non-interactive.
 
+### Pointing the miner at the rpow3 sandbox
+
+If you want to mine the `rpow3.com` sandbox instead, override both the API
+base and the origin:
+
+```bash
+RPOW_API_BASE=https://api.rpow3.com \
+RPOW_ORIGIN=https://rpow3.com \
+rpow-miner login --email you@example.com
+# (then run the miner with the same overrides + the printed cookie)
+```
+
 ## Self-test (no auth needed)
 
 To verify your build is hashing correctly and benchmark the hashrate without
@@ -126,14 +138,14 @@ function the server uses, then prints the hashrate and exits.
 ## Configuration
 
 All configuration is via environment variables. Each `RPOW_*` name also
-accepts the legacy `RPOW2_*` form (for users who already configured the
-previous miner version that targeted `rpow2.com`).
+accepts the equivalent `RPOW2_*` form (the two are aliases — use whichever
+matches your mental model of the project).
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `RPOW_COOKIE` | yes (mining mode) | – | Cookie header value, e.g. `rpow_session=eyJ...`. Obtain via `rpow-miner login`. Multiple cookies semicolon-separated also work. |
-| `RPOW_API_BASE` | no | `https://api.rpow3.com` | API base URL. |
-| `RPOW_ORIGIN` | no | `https://rpow3.com` | Origin/Referer header. |
+| `RPOW_API_BASE` | no | `https://api.rpow2.com` | API base URL. Set to `https://api.rpow3.com` for the sandbox. |
+| `RPOW_ORIGIN` | no | `https://rpow2.com` | Origin/Referer header. Match `RPOW_API_BASE`. |
 | `RPOW_USER_AGENT` | no | `rpow-miner/0.1 ...` | User-Agent header. |
 | `RPOW_THREADS` | no | all logical CPUs | Number of mining worker threads. |
 | `RPOW_LOG` | no | `info` | `tracing` filter, e.g. `debug`, `rpow_miner=debug`. |
@@ -171,7 +183,7 @@ This repo is Railway-ready. Two-minute path:
    ```bash
    cargo run --release -- login --email you@example.com
    # …click the link in your email, paste it back, copy the printed cookie.
-   # First-time? This automatically creates your rpow3 account.
+   # First-time? This automatically creates your rpow2 account.
    ```
    You can do this on any machine — even a laptop. The cookie is portable.
 2. **Push** the code to a GitHub repo of yours.
@@ -183,15 +195,14 @@ This repo is Railway-ready. Two-minute path:
      (looks like `rpow_session=eyJ...`).
    - *(Optional)* `RPOW_THREADS` if you want to cap cores.
 5. **Deploy**. Watch the deploy logs — you should see
-   `authenticated to rpow3.com email=you@...` within a few seconds, then
-   mining logs.
+   `authenticated email=you@...` within a few seconds, then mining logs.
 
 The service exposes `/health` and `/stats` on the Railway-injected `$PORT`, so
 you'll see a healthy green dot in Railway's dashboard once it boots.
 
 ### Cookie expiry
 
-The rpow3 session cookie is valid for ~30 days (no refresh flow). If the
+The rpow2 session cookie is valid for ~30 days (no refresh flow). If the
 miner ever sees `401 Unauthorized` from `/mint` or `/challenge`, it logs an
 error and sleeps 60 seconds between retries — it does **not** crash-loop the
 container. To recover, run `rpow-miner login` again, copy the new cookie, and
@@ -261,7 +272,7 @@ journalctl -u rpow-miner -f
 - `src/server.rs` — minimal `axum` HTTP server for `/health` + `/stats`.
 - `src/stats.rs` — atomic counters shared between miner workers and the HTTP
   server.
-- `src/config.rs` — env-var parsing (with `RPOW2_*` legacy-name fallback).
+- `src/config.rs` — env-var parsing (with `RPOW2_*` aliases).
 
 The mining hot loop hashes 4096 nonces between `stop`-flag checks; on a 2-vCPU
 machine the self-test reports ~26 MH/s aggregate (~13 MH/s/core). Real-world
